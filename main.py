@@ -1,11 +1,18 @@
 import numpy as np
+import tkinter as tk
 
-def print_hi(name):
-    print(f'Hi, {name}')
+class ImageEditor:
+    def __init__(self):
+        self.root = root
+        self.root.title("Image Editor")
 
+        self.canvas = tk.Canvas(root, width=400, height=600)
+        self.canvas.pack()
 
+        button = tk.Button(root, text="Test")
+        button.pack()
 
-if __name__ == '__main__':
-    print_hi('Hello, world!')
-
-
+# Main Window
+root = tk.Tk() # instance of the main window
+editor = ImageEditor()
+root.mainloop()
