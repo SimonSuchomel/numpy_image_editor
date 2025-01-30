@@ -4,8 +4,15 @@ from PIL import Image
 
 upload_dir = os.path.join(os.getcwd(), 'uploads') # defines the path for the uploads directory
 class WebServer:
+    def __init__(self):
+        self.current_image = None  # To track the current uploaded image
+
     @cherrypy.expose
     def index(self):
+        mage_preview = ''
+        if self.current_image:
+            image_preview = f'<img src="/uploads/{self.current_image}" alt="Uploaded Image" style="max-width:100%; height:auto;">'
+
         return f'''
         <html>
         <head>
@@ -98,16 +105,41 @@ class WebServer:
 
     @cherrypy.expose
     def open_file(self, file):
-        if file.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-            file_path = os.path.join(upload_dir, file.filename)
-            with open(file_path, 'wb') as f:
-                f.write(file.file.read())
+        # Ensure uploads directory exists
+        if not os.path.exists(upload_dir):
+            os.makedirs(upload_dir)
 
-            return f'''
-            <img src="/uploads/{file.filename}" alt="Uploaded Image" style="max-width:100%; height:auto;">
-            '''
+        # Check if file is provided and is not empty
+        if file:
+            # Verify the file is a valid image format
+            if hasattr(file, 'filename') and file.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                file_path = os.path.join(upload_dir, file.filename)
+                with open(file_path, 'wb') as f:
+                    f.write(file.file.read())  # Save the uploaded file
+
+                # Update the current image to the uploaded file
+                self.current_image = file.filename
+
+                # Return the image preview in the browser
+                return f'''
+                      <img src="/uploads/{file.filename}" alt="Uploaded Image" style="max-width:100%; height:auto;">
+                      '''
+            else:
+                # Invalid file type, just keeps the current image
+                if self.current_image:
+                    return f'''
+                       <img src="/uploads/{self.current_image}" alt="Uploaded Image" style="max-width:100%; height:auto;">
+                       '''
+                else:
+                    return "<p>Invalid file type. Please enter .jpg or .png and upload a valid image.</p>"
         else:
-            return "<p>Invalid file type. Please enter .jpg or .png.</p>"
+            # No file uploaded, just keeps the current image
+            if self.current_image:
+                return f'''
+                  <img src="/uploads/{self.current_image}" alt="Uploaded Image" style="max-width:100%; height:auto;">
+                  '''
+            else:
+                return "<p>No file uploaded. Please select a file to upload.</p>"
 
     @cherrypy.expose
     def uploads(self, filename):
@@ -117,4 +149,3 @@ class WebServer:
 
 if __name__ == '__main__':
     cherrypy.quickstart(WebServer())
-    # TODO - When exiting image opener -> error
