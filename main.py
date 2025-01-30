@@ -1,18 +1,16 @@
 import os
 import cherrypy
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageFilter
 
 upload_dir = os.path.join(os.getcwd(), 'uploads') # defines the path for the uploads directory
 class WebServer:
     def __init__(self):
         self.current_image = None  # To track the current uploaded image
+        self.edges_highlighted = False  # To track if the edges are currently highlighted
 
     @cherrypy.expose
     def index(self):
-        mage_preview = ''
-        if self.current_image:
-            image_preview = f'<img src="/uploads/{self.current_image}" alt="Uploaded Image" style="max-width:100%; height:auto;">'
-
         return f'''
         <html>
         <head>
@@ -31,10 +29,15 @@ class WebServer:
                 }}
                 .preview {{
                     flex: 2;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 98vh;
                 }}
                 img {{
                     max-width: 100%;
-                    height: auto;
+                    max-height: 98vh;
+                    object-fit: contain;
                 }}
                 .open-file-input {{
                     display: none;
@@ -146,6 +149,10 @@ class WebServer:
         file_path = os.path.join(upload_dir, filename)
         if os.path.exists(file_path):
             return cherrypy.lib.static.serve_file(file_path, content_type='image/jpeg')
+
+    @cherrypy.expose
+    def highlight_edges(self):
+        ...
 
 if __name__ == '__main__':
     cherrypy.quickstart(WebServer())
