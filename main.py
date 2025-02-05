@@ -2,6 +2,7 @@ import os
 import cherrypy
 import numpy as np
 from PIL import Image
+from scipy.signal import convolve2d
 
 upload_dir = os.path.join(os.getcwd(), 'uploads')
 
@@ -78,7 +79,7 @@ class WebServer:
                             border-radius: 5px;
                             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
                         }
-                        .resize-controls, .edge-controls, .brightness-controls, .negative-controls {
+                        .resize-controls, .edge-controls, .brightness-controls, .negative-controls, .solarize-controls {
                             display: none;
                             margin-top: 15px;
                             padding: 15px;
@@ -180,22 +181,18 @@ class WebServer:
                         }
 
                         function toggleEdgeDetection() {
-                            const controls = document.getElementById('edgeControls');
-                            controls.style.display = controls.style.display === 'none' || controls.style.display === '' ? 'block' : 'none';
-                            if (controls.style.display === 'block') {
-                                document.getElementById('threshold').value = 0;
-                                document.getElementById('thresholdValue').textContent = '0';
-                            }
-                        }
+                        const controls = document.getElementById('edgeControls');
+                        controls.style.display = controls.style.display === 'none' || controls.style.display === '' ? 'block' : 'none';
+                    }
 
                         function toggleNegative() {
                             const controls = document.getElementById('negativeControls');
                             controls.style.display = controls.style.display === 'none' || controls.style.display === '' ? 'block' : 'none';
                         }
 
-                        function updateThresholdValue() {
-                            const threshold = document.getElementById('threshold').value;
-                            document.getElementById('thresholdValue').textContent = threshold;
+                        function toggleSolarize() {
+                            const controls = document.getElementById('solarizeControls');
+                            controls.style.display = controls.style.display === 'none' || controls.style.display === '' ? 'block' : 'none';
                         }
 
                         function updateBrightnessValue() {
@@ -224,21 +221,25 @@ class WebServer:
                         function processImage() {
                             const width = document.getElementById('width').value;
                             const height = document.getElementById('height').value;
-                            const threshold = document.getElementById('threshold').value;
+                            const edgeType = document.querySelector('input[name="edgeType"]:checked').value;
                             const brightness = document.getElementById('brightness').value;
                             const resizeControls = document.getElementById('resizeControls');
-                            const solarize = document.getElementById('solarizeCheck').checked;
+                            
+                            const solarizeType = document.querySelector('input[name="solarizeType"]:checked').value;
+                            const solarize = solarizeType === 'apply';
+                            
                             const negativeType = document.querySelector('input[name="negativeType"]:checked').value;
                             const negative = negativeType !== 'none';
-
-                            let url = `/process_image?threshold=${threshold}&brightness=${brightness}`;
-
+                            
+                            //  URL with all necessary parameters
+                            let url = `/process_image?brightness=${brightness}&edgeType=${edgeType}`;
+                            
                             if (resizeControls.style.display === 'block' && width && height) {
                                 url += `&width=${width}&height=${height}`;
                             }
-
+                            
                             url += `&solarize=${solarize}&negative=${negative}&negativeType=${negativeType}`;
-
+                            
                             fetch(url)
                                 .then(response => response.text())
                                 .then(html => {
@@ -295,14 +296,23 @@ class WebServer:
                                        oninput="updateBrightnessValue()">
                             </div>
 
-                            <button class="styled-button" onclick="toggleEdgeDetection()">Edge Detection</button>
-
                             <!-- Edge Detection Controls -->
-                            <div id="edgeControls" class="edge-controls">
-                                <label for="threshold">Edge Threshold: <span id="thresholdValue">0</span></label>
-                                <input type="range" id="threshold" name="threshold"
-                                       min="0" max="255" step="1" value="0"
-                                       oninput="updateThresholdValue()">
+                            <button class="styled-button" onclick="toggleEdgeDetection()">Highlight Edges</button>
+                            <div id="edgeControls" class="negative-controls">
+                                <div class="radio-group">
+                                    <label>
+                                        <input type="radio" name="edgeType" value="none" checked>
+                                        None
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="edgeType" value="laplacian">
+                                        Laplacian
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="edgeType" value="prewitt">
+                                        Prewitt
+                                    </label>
+                                </div>
                             </div>
 
                             <!-- Negative Controls -->
@@ -322,11 +332,23 @@ class WebServer:
                                         Black & White
                                     </label>
                                 </div>
-                                <div class="nested-control">
-                                    <input type="checkbox" id="solarizeCheck">
-                                    <label for="solarizeCheck">Solarize</label>
+                            </div>
+
+                            <!-- Solarize Controls -->
+                            <button class="styled-button" onclick="toggleSolarize()">Solarize</button>
+                            <div id="solarizeControls" class="solarize-controls">
+                                <div class="radio-group">
+                                    <label>
+                                        <input type="radio" name="solarizeType" value="none" checked>
+                                        None
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="solarizeType" value="apply">
+                                        Apply
+                                    </label>
                                 </div>
                             </div>
+
                         </div>
 
                         <div class="section-divider"></div>
@@ -340,8 +362,8 @@ class WebServer:
             '''
 
     @cherrypy.expose
-    def process_image(self, threshold=0, brightness=0, width=None, height=None, solarize="false", negative="false",
-                      negativeType="color"):
+    def process_image(self, brightness=0, width=None, height=None, edgeType="none", solarize="false",
+                      negative="false", negativeType="color"):
         if not self.current_image:
             return "<p>Please upload an image first.</p>"
 
@@ -368,47 +390,64 @@ class WebServer:
             except ValueError:
                 pass
 
+            if edgeType != "none":
+                if len(img_array.shape) == 3:
+                    gray = np.dot(img_array[..., :3], [0.2989, 0.5870, 0.1140])
+                else:
+                    gray = img_array
+
+                gray = gray / 255.0
+
+                if edgeType == "laplacian":
+                    kernel = np.array([[0, 2, 0],
+                                       [2, -8, 2],
+                                       [0, 2, 0]])
+                    edges = np.abs(convolve2d(gray, kernel, mode='same', boundary='symm'))
+                    edges = edges * 20
+
+                elif edgeType == "prewitt":
+                    kernel_x = np.array([[-1, 0, 1],
+                                         [-2, 0, 2],
+                                         [-1, 0, 1]]) * 2
+                    kernel_y = np.array([[-1, -2, -1],
+                                         [0, 0, 0],
+                                         [1, 2, 1]]) * 2
+
+                    gx = convolve2d(gray, kernel_x, mode='same', boundary='symm')
+                    gy = convolve2d(gray, kernel_y, mode='same', boundary='symm')
+                    edges = np.sqrt(gx ** 2 + gy ** 2)
+                    edges = edges * 20
+
+                # Enhances normalization and contrast
+                if edges.max() > 0:
+                    # Normalizes to 0-1
+                    edges = edges / edges.max()
+                    # Stronger contrast enhancement
+                    edges = np.power(edges, 0.5)  # Gamma correction to enhance weak edges
+                    edges = np.clip((edges - 0.2) * 3, 0, 1)  # Stronger contrast
+                    edges = edges * 255
+
+                # Makes white edges on black background
+                edges = 255 - edges  # Invert to get white edges
+
+
+                edges = np.where(edges > 240, 255, 0)
+
+                # Converts back to RGB
+                edges_rgb = np.dstack([edges] * 3)
+                img_array = edges_rgb
+
             if solarize.lower() == "true":
                 threshold_value = 128
                 img_array = np.where(img_array > threshold_value, 255 - img_array, img_array)
 
             if negative.lower() == "true":
                 if negativeType == "bw":
-                    # Convert to grayscale first (using standard RGB weights)
                     grayscale = np.dot(img_array[..., :3], [0.2989, 0.5870, 0.1140])
                     negative = 255 - grayscale
-                    # Stack the same values for all channels to maintain RGB format
                     img_array = np.stack([negative] * 3, axis=-1)
                 else:
-                    # Regular color negative
-                    img_array = 255 - img_array
-
-            try:
-                threshold = float(threshold)
-                if threshold > 0:
-                    edges_rgb = np.zeros_like(img_array)
-
-                    for channel in range(3):
-                        channel_data = img_array[:, :, channel]
-                        gy, gx = np.gradient(channel_data)
-                        edges = np.sqrt(gx ** 2 + gy ** 2)
-
-                        if edges.max() > 0:
-                            edges = (edges / edges.max() * 255)
-
-                        edges[edges < threshold] = 0
-                        edges_rgb[:, :, channel] = edges
-
-                    edge_magnitude = np.max(edges_rgb, axis=2)
-
-                    for channel in range(3):
-                        img_array[:, :, channel] = np.where(
-                            edge_magnitude >= threshold,
-                            img_array[:, :, channel],
-                            0
-                        )
-            except ValueError:
-                pass
+                    img_array = 255.0 - img_array
 
             img_array = np.clip(img_array, 0, 255).astype(np.uint8)
             result_image = Image.fromarray(img_array)
@@ -442,7 +481,6 @@ class WebServer:
         return "<p>No file uploaded. Please select a file to upload.</p>"
 
 
-
 if __name__ == '__main__':
     if not os.path.exists(upload_dir):
         os.makedirs(upload_dir)
@@ -457,7 +495,5 @@ if __name__ == '__main__':
 
     cherrypy.quickstart(WebServer(), '/', conf)
 
-
-    # TODO Solarize button not in toggle Convert to negative
-    # TODO Edge detection Colorful or Black & White option
-    # TODO After Choosing file - reset current_image
+    # TODO plain white image becomes black after processing
+    # TODO Better implementation of laplacian and prewitt
