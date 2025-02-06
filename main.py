@@ -373,6 +373,13 @@ class WebServer:
 
             img = Image.open(image_path)
 
+            # Preserves alpha channel if it exists
+            if img.mode in ('RGBA', 'LA'):
+                img = img.convert("RGBA")
+            else:
+                img = img.convert("RGB")
+
+            """ Resize option """
             if width and height:
                 try:
                     new_width = int(width)
@@ -381,76 +388,97 @@ class WebServer:
                 except (TypeError, ValueError):
                     return "<p>Please enter valid numerical dimensions.</p>"
 
-            img_array = np.array(img).astype(np.float32)
+            img_array = np.array(img)
 
-            try:
-                brightness = float(brightness)
-                brightness_factor = 1.0 + (brightness / 100.0)
-                img_array = img_array * brightness_factor
-            except ValueError:
-                pass
+            """ Brightness option """
+            brightness = float(brightness)
+            brightness_factor = 1.0 + (brightness / 100.0)
 
+            # Separates an alpha channel if exists
+            if img_array.shape[2] == 4:
+                alpha = img_array[:, :, 3]
+                img_array = img_array[:, :, :3]
+            else:
+                alpha = None
+
+            # Brightness scaling
+            img_array = np.clip(img_array * brightness_factor, 0, 255).astype(np.uint8)
+
+            """ Highlight edges option """
             if edgeType != "none":
+                # Converts to grayscale for edge detection
                 if len(img_array.shape) == 3:
                     gray = np.dot(img_array[..., :3], [0.2989, 0.5870, 0.1140])
                 else:
                     gray = img_array
 
-                gray = gray / 255.0
+                gray = gray / 255.0  # Normalization to [0, 1]
 
                 if edgeType == "laplacian":
-                    kernel = np.array([[0, 2, 0],
-                                       [2, -8, 2],
-                                       [0, 2, 0]])
+                    kernel = np.array([[-1, -1, -1],
+                                       [-1, 8, -1],
+                                       [-1, -1, -1]])
                     edges = np.abs(convolve2d(gray, kernel, mode='same', boundary='symm'))
-                    edges = edges * 20
+
+                    # Enhances edge visibility
+                    edges = (edges - edges.min()) / (edges.max() - edges.min())  # Normalization
+                    edges = np.power(edges, 0.5)  # Contrast enhancement
+                    edges = np.clip(edges * 255, 0, 255).astype(np.uint8)
+
+
+                    mask = edges > 55
 
                 elif edgeType == "prewitt":
-                    kernel_x = np.array([[-1, 0, 1],
-                                         [-2, 0, 2],
-                                         [-1, 0, 1]]) * 2
-                    kernel_y = np.array([[-1, -2, -1],
+                    kernel_x = np.array([[1, 0, -1],
+                                         [1, 0, -1],
+                                         [1, 0, -1]])
+                    kernel_y = np.array([[1, 1, 1],
                                          [0, 0, 0],
-                                         [1, 2, 1]]) * 2
-
+                                         [-1, -1, -1]])
                     gx = convolve2d(gray, kernel_x, mode='same', boundary='symm')
                     gy = convolve2d(gray, kernel_y, mode='same', boundary='symm')
                     edges = np.sqrt(gx ** 2 + gy ** 2)
-                    edges = edges * 20
 
-                # Enhances normalization and contrast
-                if edges.max() > 0:
-                    # Normalizes to 0-1
-                    edges = edges / edges.max()
-                    # Stronger contrast enhancement
-                    edges = np.power(edges, 0.5)  # Gamma correction to enhance weak edges
-                    edges = np.clip((edges - 0.2) * 3, 0, 1)  # Stronger contrast
-                    edges = edges * 255
-
-                # Makes white edges on black background
-                edges = 255 - edges  # Invert to get white edges
+                    # Normalization of edges to [0, 255]
+                    edges = (edges / edges.max() * 255) if edges.max() > 0 else edges
+                    edges = np.clip(edges, 0, 255).astype(np.uint8)
 
 
-                edges = np.where(edges > 240, 255, 0)
+                    mask = edges > 35
 
-                # Converts back to RGB
-                edges_rgb = np.dstack([edges] * 3)
-                img_array = edges_rgb
+                # Creates a black and white image with edges
+                img_array = np.zeros_like(img_array)
+                img_array[mask] = [0, 0, 0]  # Black for edges
+                img_array[~mask] = [255, 255, 255]  # White for non-edge areas
 
+            """ Solarize option """
             if solarize.lower() == "true":
                 threshold_value = 128
                 img_array = np.where(img_array > threshold_value, 255 - img_array, img_array)
 
+            """ Convert to negative option """
             if negative.lower() == "true":
                 if negativeType == "bw":
-                    grayscale = np.dot(img_array[..., :3], [0.2989, 0.5870, 0.1140])
-                    negative = 255 - grayscale
-                    img_array = np.stack([negative] * 3, axis=-1)
+                    grayscale = np.dot(img_array[..., :3], [0.2989, 0.5870, 0.1140]).astype( np.float32)  # Grayscale conversion
+
+                    # Inverts the grayscale image
+                    grayscale_negative = 255 - grayscale
+
+                    # Ensures that the result is in the valid range [0, 255]
+                    img_array = np.stack([grayscale_negative] * 3,
+                                         axis=-1)  # Converts single channel to RGB by repeating grayscale
+                    img_array = np.clip(img_array, 0, 255).astype(np.uint8)
                 else:
                     img_array = 255.0 - img_array
 
             img_array = np.clip(img_array, 0, 255).astype(np.uint8)
-            result_image = Image.fromarray(img_array)
+
+            # Alpha channel for transparent images
+            if alpha is not None:
+                result_image = Image.fromarray(np.dstack((img_array, alpha)))
+            else:
+                result_image = Image.fromarray(img_array)
+
             result_image.save(output_path)
 
             timestamp = int(cherrypy.response.time)
@@ -494,6 +522,3 @@ if __name__ == '__main__':
     }
 
     cherrypy.quickstart(WebServer(), '/', conf)
-
-    # TODO plain white image becomes black after processing
-    # TODO Better implementation of laplacian and prewitt
